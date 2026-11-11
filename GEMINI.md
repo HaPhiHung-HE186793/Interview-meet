@@ -52,6 +52,6 @@ Trước khi thiết kế tính năng, sửa schema database, chọn API, địn
 ## 4. Quy Trình Đồng Bộ Giữa Gemini Web & Antigravity IDE
 
 - **Gemini Web + Gem `Interview-Meet Partner & Architect` + Sổ NotebookLM `00_INTERVIEW_MEET_CONTEXT_ENGINE`:** Đóng vai trò Bộ não Nghiên cứu, khảo sát thị trường và phản biện kiến trúc.
-- **Antigravity IDE (Repo `Interview-meet`):** Đóng vai trò Động cơ Thực thi Code, kiểm thử cục bộ và quản lý Git (`https://github.com/HaPhiHung-HE186793/Interview-meet.git`).
-- **Quy tắc Git bắt buộc:** Mọi thay đổi code, cấu hình hoặc tài liệu sau khi hoàn thành và kiểm thử cục bộ đều phải được kiểm tra an toàn (`git status`, tuyệt đối không lọt `.env` hay file âm thanh thô), tạo commit rõ ràng và đẩy thẳng (`git push`) lên remote `origin` (`https://github.com/HaPhiHung-HE186793/Interview-meet.git`, nhánh `main`).
+- **Antigravity IDE (Repo `Interview-meet`):** Đóng vai trò Động cơ Thực thi Code, kiểm thử cục bộ và quản lý Git (`git@github.com:HaPhiHung-HE186793/Interview-meet.git` / https://github.com/HaPhiHung-HE186793/Interview-meet).
+- **Quy tắc Git bắt buộc:** Mọi thay đổi code, cấu hình hoặc tài liệu sau khi hoàn thành và kiểm thử cục bộ đều phải được kiểm tra an toàn (`git status`, tuyệt đối không lọt `.env` hay file âm thanh thô), tạo commit rõ ràng và đẩy thẳng (`git push origin main` qua SSH) lên GitHub ngay.
 - Mỗi khi có thay đổi kiến trúc hoặc kết quả thực nghiệm PoC quan trọng tại repo này, cập nhật lại `GEMINI.md` / `docs/` để đồng bộ ngược về sổ NotebookLM `00_INTERVIEW_MEET_CONTEXT_ENGINE`.
