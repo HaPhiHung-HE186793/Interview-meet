@@ -3,9 +3,10 @@
 
 Validates Interview-Meet Context Engine Gate 1 Go/No-Go criteria:
   1. Zero-cost 100% accurate speaker separation via independent Tab + Mic channels.
-  2. Vietnamese-English IT code-switching accuracy with CV/JD vocabulary biasing (WER < 12%).
-  3. Sub-second segment/token timestamp alignment (< 1s drift) for local IndexedDB audio citations.
-  4. Unit economics verification (~1,300 - 2,000 VND / 1-hour meeting after VAD).
+  2. Pre-STT VAD silence slicing + exact wall-clock timestamp remapping (eliminates
+     Whisper silence hallucinations and cuts STT billing by 30%-55%).
+  3. Vietnamese-English IT code-switching accuracy with CV/JD vocabulary biasing (WER < 12%).
+  4. Sub-second segment/word timestamp alignment (< 1s drift) for local IndexedDB audio citations.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -48,8 +50,13 @@ def load_env_files() -> None:
             os.environ.setdefault(key.strip(), val.strip().strip("'\""))
 
 
-def probe_audio_stats(audio_path: Path) -> dict[str, float]:
-    """Return audio duration (sec) and silence percentage using ffprobe/ffmpeg."""
+def probe_audio_and_speech_intervals(
+    audio_path: Path,
+    noise_db: float = -38.0,
+    min_silence_sec: float = 0.6,
+    pad_sec: float = 0.15,
+) -> dict[str, Any]:
+    """Detect total duration, silence intervals, and active speech intervals via FFmpeg."""
     duration = 0.0
     try:
         out = subprocess.check_output(
@@ -70,7 +77,7 @@ def probe_audio_stats(audio_path: Path) -> dict[str, float]:
     except Exception:
         duration = 0.0
 
-    silence_sec = 0.0
+    silences: list[tuple[float, float]] = []
     try:
         proc = subprocess.run(
             [
@@ -78,7 +85,7 @@ def probe_audio_stats(audio_path: Path) -> dict[str, float]:
                 "-i",
                 str(audio_path),
                 "-af",
-                "silencedetect=noise=-38dB:d=0.6",
+                f"silencedetect=noise={noise_db}dB:d={min_silence_sec}",
                 "-f",
                 "null",
                 "-",
@@ -87,22 +94,120 @@ def probe_audio_stats(audio_path: Path) -> dict[str, float]:
             text=True,
             check=False,
         )
-        for m in re.finditer(r"silence_duration:\s*([0-9.]+)", proc.stderr):
-            silence_sec += float(m.group(1))
+        cur_start: float | None = None
+        for line in proc.stderr.splitlines():
+            m_start = re.search(r"silence_start:\s*([0-9.]+)", line)
+            if m_start:
+                cur_start = max(0.0, float(m_start.group(1)))
+            m_end = re.search(r"silence_end:\s*([0-9.]+)", line)
+            if m_end and cur_start is not None:
+                silences.append((cur_start, float(m_end.group(1))))
+                cur_start = None
         if duration <= 0:
             dur_match = re.findall(r"time=(\d+):(\d+):([0-9.]+)", proc.stderr)
             if dur_match:
                 h, m_val, s_val = dur_match[-1]
                 duration = int(h) * 3600 + int(m_val) * 60 + float(s_val)
+        if cur_start is not None and duration > cur_start:
+            silences.append((cur_start, duration))
     except Exception:
         pass
 
+    # Invert silences -> raw speech intervals
+    speech: list[list[float]] = []
+    cursor = 0.0
+    for s_start, s_end in silences:
+        if s_start - cursor > 0.12:
+            speech.append([max(0.0, cursor - pad_sec), min(duration, s_start + pad_sec)])
+        cursor = max(cursor, s_end)
+    if duration - cursor > 0.12:
+        speech.append([max(0.0, cursor - pad_sec), duration])
+
+    # Merge overlapping or closely adjacent (< 0.35s) speech intervals
+    merged_speech: list[tuple[float, float]] = []
+    for seg_s, seg_e in speech:
+        if merged_speech and seg_s - merged_speech[-1][1] <= 0.35:
+            prev_s, prev_e = merged_speech[-1]
+            merged_speech[-1] = (prev_s, max(prev_e, seg_e))
+        else:
+            merged_speech.append((round(seg_s, 3), round(seg_e, 3)))
+
+    active_sec = sum(e - s for s, e in merged_speech) if silences else duration
+    silence_sec = max(0.0, duration - active_sec)
     silence_pct = min(100.0, (silence_sec / duration * 100.0)) if duration > 0 else 0.0
     return {
         "duration_sec": round(duration, 2),
-        "silence_sec": round(min(duration, silence_sec), 2),
+        "active_sec": round(active_sec, 2),
+        "silence_sec": round(silence_sec, 2),
         "silence_pct": round(silence_pct, 1),
+        "speech_intervals": merged_speech,
     }
+
+
+class VadAudioSliceMap:
+    """Slices non-silent intervals into a compact audio file and remaps timestamps back to wall-clock."""
+
+    def __init__(self, intervals: list[tuple[float, float]]) -> None:
+        self.entries: list[tuple[float, float, float, float]] = []
+        comp_cursor = 0.0
+        for orig_s, orig_e in intervals:
+            seg_len = max(0.0, orig_e - orig_s)
+            if seg_len <= 0.05:
+                continue
+            self.entries.append((comp_cursor, comp_cursor + seg_len, orig_s, orig_e))
+            comp_cursor += seg_len
+
+    def to_wall_clock(self, comp_sec: float) -> float:
+        if not self.entries:
+            return round(comp_sec, 2)
+        for c_s, c_e, o_s, _o_e in self.entries:
+            if comp_sec <= c_e + 0.05:
+                offset = max(0.0, comp_sec - c_s)
+                return round(o_s + offset, 2)
+        _c_s, c_e, _o_s, o_e = self.entries[-1]
+        return round(o_e + max(0.0, comp_sec - c_e), 2)
+
+
+def build_vad_compacted_audio(
+    audio_path: Path,
+    intervals: list[tuple[float, float]],
+    tmp_dir: Path,
+) -> tuple[Path | None, VadAudioSliceMap]:
+    """Create a true silence-stripped Opus WebM file (atrim+concat) and its wall-clock remapper."""
+    mapper = VadAudioSliceMap(intervals)
+    if not mapper.entries:
+        return None, mapper
+
+    filter_parts: list[str] = []
+    concat_inputs: list[str] = []
+    for idx, (_cs, _ce, o_s, o_e) in enumerate(mapper.entries):
+        tag = f"a{idx}"
+        filter_parts.append(f"[0:a]atrim=start={o_s:.3f}:end={o_e:.3f},asetpts=PTS-STARTPTS[{tag}]")
+        concat_inputs.append(f"[{tag}]")
+    n_parts = len(mapper.entries)
+    filter_complex = ";".join(filter_parts) + f";{''.join(concat_inputs)}concat=n={n_parts}:v=0:a=1[outa]"
+
+    out_path = tmp_dir / f"vad_{audio_path.stem}.webm"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(audio_path),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[outa]",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "32k",
+            str(out_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return out_path, mapper
 
 
 def load_vocab(vocab_path: Path) -> dict[str, Any]:
@@ -112,12 +217,14 @@ def load_vocab(vocab_path: Path) -> dict[str, Any]:
 
 
 def build_whisper_prompt(vocab: dict[str, Any]) -> str:
-    """Build a compact bilingual prompt (< 200 tokens) to bias Groq Whisper."""
+    """Build a natural transcript-style bilingual prompt (< 200 tokens) for Whisper.
+
+    Note: Whisper `prompt` acts as preceding transcript tokens (not LLM instructions).
+    Using natural bilingual technical prose conditions BPE spelling without triggering
+    subtitle/meta-instruction hallucinations.
+    """
     terms = ", ".join(vocab.get("terms", [])[:28])
-    prompt = (
-        f"Phỏng vấn kỹ thuật IT song ngữ Việt - Anh ({vocab.get('role', 'Software Engineer')}). "
-        f"Giữ nguyên tiếng Việt và viết đúng chính tả các thuật ngữ tiếng Anh: {terms}."
-    )
+    prompt = f"Buổi phỏng vấn kỹ thuật {vocab.get('role', 'Software Engineer')}: {terms}."
     return prompt[:750]
 
 
@@ -125,6 +232,7 @@ def transcribe_groq_whisper(
     audio_path: Path,
     speaker_label: str,
     vocab: dict[str, Any],
+    mapper: VadAudioSliceMap,
     language: str | None = "vi",
 ) -> dict[str, Any]:
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
@@ -157,36 +265,54 @@ def transcribe_groq_whisper(
         raise RuntimeError(f"Groq API HTTP {resp.status_code}: {resp.text[:400]}")
 
     payload = resp.json()
+    words = payload.get("words") or []
     segments = []
     for seg in payload.get("segments") or []:
         text = (seg.get("text") or "").strip()
         no_speech = float(seg.get("no_speech_prob") or 0.0)
-        if not text or no_speech > 0.80:
+        avg_logprob = float(seg.get("avg_logprob") or 0.0)
+        if not text or no_speech > 0.70 or avg_logprob < -1.35:
             continue
+        raw_s = float(seg.get("start", 0.0))
+        raw_e = float(seg.get("end", 0.0))
+        # Tighten boundaries using word-level timestamps when available
+        seg_words = [
+            w for w in words if float(w.get("start", 0.0)) >= raw_s - 0.05 and float(w.get("end", 0.0)) <= raw_e + 0.15
+        ]
+        if seg_words:
+            raw_s = float(seg_words[0].get("start", raw_s))
+            raw_e = float(seg_words[-1].get("end", raw_e))
+
         segments.append(
             {
                 "speaker": speaker_label,
-                "start_sec": round(float(seg.get("start", 0.0)), 2),
-                "end_sec": round(float(seg.get("end", 0.0)), 2),
+                "start_sec": mapper.to_wall_clock(raw_s),
+                "end_sec": mapper.to_wall_clock(raw_e),
                 "text": text,
             }
         )
 
+    clean_full_text = " ".join(s["text"] for s in segments)
     return {
         "provider": "groq_whisper_v3_turbo",
         "latency_sec": round(elapsed, 2),
-        "full_text": (payload.get("text") or "").strip(),
+        "full_text": clean_full_text,
         "segments": segments,
-        "word_count": len(payload.get("words") or []),
+        "word_count": len(words),
     }
 
 
-def group_soniox_tokens(tokens: list[dict[str, Any]], speaker_label: str) -> list[dict[str, Any]]:
+def group_soniox_tokens(
+    tokens: list[dict[str, Any]],
+    speaker_label: str,
+    mapper: VadAudioSliceMap | None = None,
+) -> list[dict[str, Any]]:
     """Group token-level timestamps into readable sentence/pause segments."""
     segments: list[dict[str, Any]] = []
     buf_text: list[str] = []
     seg_start: float | None = None
     last_end: float = 0.0
+    remap = mapper.to_wall_clock if mapper else (lambda x: round(x, 2))
 
     for tok in tokens:
         txt = tok.get("text") or ""
@@ -199,8 +325,8 @@ def group_soniox_tokens(tokens: list[dict[str, Any]], speaker_label: str) -> lis
             segments.append(
                 {
                     "speaker": speaker_label,
-                    "start_sec": round(seg_start, 2),
-                    "end_sec": round(last_end, 2),
+                    "start_sec": remap(seg_start),
+                    "end_sec": remap(last_end),
                     "text": "".join(buf_text).strip(),
                 }
             )
@@ -216,8 +342,8 @@ def group_soniox_tokens(tokens: list[dict[str, Any]], speaker_label: str) -> lis
             segments.append(
                 {
                     "speaker": speaker_label,
-                    "start_sec": round(seg_start, 2),
-                    "end_sec": round(last_end, 2),
+                    "start_sec": remap(seg_start),
+                    "end_sec": remap(last_end),
                     "text": "".join(buf_text).strip(),
                 }
             )
@@ -228,8 +354,8 @@ def group_soniox_tokens(tokens: list[dict[str, Any]], speaker_label: str) -> lis
         segments.append(
             {
                 "speaker": speaker_label,
-                "start_sec": round(seg_start or 0.0, 2),
-                "end_sec": round(last_end, 2),
+                "start_sec": remap(seg_start or 0.0),
+                "end_sec": remap(last_end),
                 "text": "".join(buf_text).strip(),
             }
         )
@@ -240,6 +366,7 @@ def transcribe_soniox(
     audio_path: Path,
     speaker_label: str,
     vocab: dict[str, Any],
+    mapper: VadAudioSliceMap,
 ) -> dict[str, Any]:
     api_key = os.environ.get("SONIOX_API_KEY", "").strip()
     if not api_key:
@@ -285,7 +412,6 @@ def transcribe_soniox(
             timeout=60,
         )
         if job_resp.status_code >= 400 and preferred_model != "stt-async-v3":
-            # Fallback without structured context object if an older model/tier rejects v4 schema
             fallback_body = {
                 "model": "stt-async-v3",
                 "file_id": file_id,
@@ -328,11 +454,12 @@ def transcribe_soniox(
         tr_data = tr_resp.json()
         elapsed = time.perf_counter() - t0
         tokens = tr_data.get("tokens") or []
+        segments = group_soniox_tokens(tokens, speaker_label, mapper=mapper)
         return {
             "provider": f"soniox_{preferred_model}",
             "latency_sec": round(elapsed, 2),
-            "full_text": (tr_data.get("text") or "").strip(),
-            "segments": group_soniox_tokens(tokens, speaker_label),
+            "full_text": " ".join(s["text"] for s in segments),
+            "segments": segments,
             "word_count": len(tokens),
         }
     finally:
@@ -379,38 +506,38 @@ def fmt_sec(sec: float) -> str:
 def evaluate_provider(
     provider_name: str,
     fn,
-    tracks: list[tuple[str, Path]],
+    prepared_tracks: list[tuple[str, Path | None, VadAudioSliceMap]],
     vocab: dict[str, Any],
     hourly_rate_usd: float,
-    total_audio_sec: float,
-    active_audio_sec: float,
+    wall_clock_call_sec: float,
+    billed_vad_audio_sec: float,
     reference_text: str | None,
 ) -> dict[str, Any]:
     merged_segments: list[dict[str, Any]] = []
-    combined_texts: list[str] = []
     total_latency = 0.0
 
-    for speaker_label, path in tracks:
-        res = fn(path, speaker_label, vocab)
+    for speaker_label, sliced_path, mapper in prepared_tracks:
+        if sliced_path is None:
+            continue
+        res = fn(sliced_path, speaker_label, vocab, mapper)
         total_latency += res["latency_sec"]
         merged_segments.extend(res["segments"])
-        if res["full_text"]:
-            combined_texts.append(res["full_text"])
 
     merged_segments.sort(key=lambda s: (s["start_sec"], s["end_sec"]))
-    joined_text = " ".join(combined_texts)
-    matched_terms = detect_matched_terms(joined_text, vocab.get("terms", []))
+    chronological_text = " ".join(s["text"] for s in merged_segments)
+    matched_terms = detect_matched_terms(chronological_text, vocab.get("terms", []))
 
-    raw_cost_1h_vnd = round(hourly_rate_usd * USD_TO_VND)
-    vad_ratio = (active_audio_sec / total_audio_sec) if total_audio_sec > 0 else 0.7
-    vad_cost_1h_vnd = round(hourly_rate_usd * vad_ratio * USD_TO_VND)
+    # Raw 2-channel cost without VAD = 2x 1h tracks; with VAD slicing = only active speech across both tracks
+    raw_2ch_cost_1h_vnd = round(hourly_rate_usd * 2.0 * USD_TO_VND)
+    vad_ratio_per_wall_sec = (billed_vad_audio_sec / wall_clock_call_sec) if wall_clock_call_sec > 0 else 0.85
+    vad_cost_1h_vnd = round(hourly_rate_usd * vad_ratio_per_wall_sec * USD_TO_VND)
 
-    wer_pct = compute_wer(reference_text, joined_text) if reference_text else None
+    wer_pct = compute_wer(reference_text, chronological_text) if reference_text else None
     return {
         "provider": provider_name,
         "latency_sec": round(total_latency, 2),
-        "rtf": round(total_latency / max(1.0, total_audio_sec), 3),
-        "raw_cost_per_hour_vnd": raw_cost_1h_vnd,
+        "rtf": round(total_latency / max(1.0, wall_clock_call_sec), 3),
+        "raw_cost_per_hour_vnd": raw_2ch_cost_1h_vnd,
         "vad_adjusted_cost_per_hour_vnd": vad_cost_1h_vnd,
         "matched_terms_count": len(matched_terms),
         "matched_terms": matched_terms,
@@ -430,21 +557,21 @@ def render_markdown_report(
         f"- **Thời gian chạy:** `{datetime.now().isoformat(timespec='seconds')}`",
         f"- **Bộ từ điển CV/JD:** `{vocab_path.name}`",
         "",
-        "## 1. Thông Số Tệp Âm Thanh Đầu Vào & Hiệu Quả Lọc Khoảng Lặng (VAD)",
-        "| Kênh người nói | Tệp âm thanh | Thời lượng (s) | Khoảng lặng đo được | Tiết kiệm nhờ VAD |",
+        "## 1. Thông Số Tệp Âm Thanh Đầu Vào & Cắt Khoảng Lặng Trước STT (Pre-STT VAD)",
+        "| Kênh người nói | Tệp âm thanh | Thời lượng gốc | Thời lượng nói thực (VAD) | Tiết kiệm nhờ VAD |",
         "|---|---|---:|---:|---:|",
     ]
     for tm in tracks_meta:
         lines.append(
             f"| **{tm['speaker']}** | `{tm['file']}` | {tm['duration_sec']}s | "
-            f"{tm['silence_sec']}s | **{tm['silence_pct']}%** |"
+            f"{tm['active_sec']}s | **{tm['silence_pct']}%** |"
         )
 
     lines.extend(
         [
             "",
             "## 2. Bảng Đọ Sức Các Engine STT (Code-Switching Anh–Việt)",
-            "| Engine STT | Độ trễ API | RTF | Giá gốc / 1h họp | Giá sau lọc VAD / 1h | Thuật ngữ IT bắt trúng | WER (%) | Cổng 1 (<12%) |",
+            "| Engine STT | Độ trễ API | RTF | Giá thô 2 kênh / 1h | Giá thực sau VAD / 1h | Thuật ngữ IT bắt trúng | WER (%) | Cổng 1 (<12%) |",
             "|---|---:|---:|---:|---:|---:|---:|---|",
         ]
     )
@@ -463,7 +590,7 @@ def render_markdown_report(
         lines.extend(
             [
                 "",
-                f"## 3. Bản Gỡ Băng Ghép 2 Kênh Theo Mốc Giây — `{r['provider']}`",
+                f"## 3. Bản Gỡ Băng Ghép 2 Kênh Kèm Mốc Giây Gốc (`IndexedDB Citation`) — `{r['provider']}`",
                 f"- **Thuật ngữ chuyên ngành bắt được:** {', '.join(f'`{t}`' for t in r['matched_terms']) or '*(Không có)*'}",
                 "",
             ]
@@ -495,6 +622,7 @@ def main() -> int:
         help="Chọn engine chạy thử (mặc định: auto chạy tất cả engine đã điền API key trong .env)",
     )
     parser.add_argument("--whisper-lang", default="vi", help="Mã ngôn ngữ cho Whisper ('vi' hoặc 'auto')")
+    parser.add_argument("--no-vad-slice", action="store_true", help="Tắt cắt khoảng lặng VAD trước khi gửi STT")
     args = parser.parse_args()
 
     tracks: list[tuple[str, Path]] = []
@@ -528,44 +656,58 @@ def main() -> int:
     reference_text = args.reference.read_text(encoding="utf-8") if args.reference else None
 
     tracks_meta = []
-    total_dur = 0.0
-    total_active = 0.0
-    for speaker, path in tracks:
-        st = probe_audio_stats(path)
-        total_dur += st["duration_sec"]
-        total_active += max(0.0, st["duration_sec"] - st["silence_sec"])
-        tracks_meta.append({"speaker": speaker, "file": path.name, **st})
+    wall_clock_call_sec = 0.0
+    billed_vad_sec = 0.0
 
-    results = []
-    if run_groq:
-        print("⏳ Đang gỡ băng qua Groq (`whisper-large-v3-turbo`) kèm từ điển CV/JD...")
-        results.append(
-            evaluate_provider(
-                "Groq (whisper-large-v3-turbo)",
-                lambda p, spk, vc: transcribe_groq_whisper(p, spk, vc, language=args.whisper_lang),
-                tracks,
-                vocab,
-                hourly_rate_usd=0.04,
-                total_audio_sec=total_dur,
-                active_audio_sec=total_active,
-                reference_text=reference_text,
-            )
-        )
+    with tempfile.TemporaryDirectory(prefix="imeet_vad_") as tmp_str:
+        tmp_dir = Path(tmp_str)
+        prepared_tracks: list[tuple[str, Path | None, VadAudioSliceMap]] = []
 
-    if run_soniox:
-        print("⏳ Đang gỡ băng qua Soniox Async API kèm Structured Context CV/JD...")
-        results.append(
-            evaluate_provider(
-                "Soniox Async STT",
-                transcribe_soniox,
-                tracks,
-                vocab,
-                hourly_rate_usd=0.10,
-                total_audio_sec=total_dur,
-                active_audio_sec=total_active,
-                reference_text=reference_text,
+        for speaker, path in tracks:
+            st = probe_audio_and_speech_intervals(path)
+            wall_clock_call_sec = max(wall_clock_call_sec, st["duration_sec"])
+            if args.no_vad_slice:
+                billed_vad_sec += st["duration_sec"]
+                identity_map = VadAudioSliceMap([(0.0, st["duration_sec"])])
+                prepared_tracks.append((speaker, path, identity_map))
+            else:
+                billed_vad_sec += st["active_sec"]
+                sliced_path, mapper = build_vad_compacted_audio(path, st["speech_intervals"], tmp_dir)
+                prepared_tracks.append((speaker, sliced_path, mapper))
+            tracks_meta.append({"speaker": speaker, "file": path.name, **st})
+
+        results = []
+        if run_groq:
+            print("⏳ Đang gỡ băng qua Groq (`whisper-large-v3-turbo`) kèm Pre-STT VAD & từ điển CV/JD...")
+            results.append(
+                evaluate_provider(
+                    "Groq (whisper-large-v3-turbo)",
+                    lambda p, spk, vc, mp: transcribe_groq_whisper(
+                        p, spk, vc, mp, language=args.whisper_lang
+                    ),
+                    prepared_tracks,
+                    vocab,
+                    hourly_rate_usd=0.04,
+                    wall_clock_call_sec=wall_clock_call_sec,
+                    billed_vad_audio_sec=billed_vad_sec,
+                    reference_text=reference_text,
+                )
             )
-        )
+
+        if run_soniox:
+            print("⏳ Đang gỡ băng qua Soniox Async API kèm Pre-STT VAD & Structured Context CV/JD...")
+            results.append(
+                evaluate_provider(
+                    "Soniox Async STT",
+                    transcribe_soniox,
+                    prepared_tracks,
+                    vocab,
+                    hourly_rate_usd=0.10,
+                    wall_clock_call_sec=wall_clock_call_sec,
+                    billed_vad_audio_sec=billed_vad_sec,
+                    reference_text=reference_text,
+                )
+            )
 
     DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
