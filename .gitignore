@@ -1,0 +1,35 @@
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.pytest_cache/
+
+# Node / Web
+node_modules/
+dist/
+build/
+.next/
+.vercel/
+
+# Local Audio Recordings & Benchmark Samples (Keep local, never commit raw audio)
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.opus
+poc/recordings/
+poc/outputs/
+
+# OS / Editor
+.DS_Store
+*.swp
+.idea/
