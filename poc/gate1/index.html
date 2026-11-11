@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
+  <title>Interview-Meet | Gate 1 PoC — Dual-Channel Bot-Free Recorder</title>
+  <style>
+    :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #f8fafc; --muted: #94a3b8; --accent: #38bdf8; --ok: #22c55e; --danger: #ef4444; --warn: #f59e0b; }
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { margin: 0; padding: 24px; background: var(--bg); color: var(--text); max-width: 960px; margin-inline: auto; line-height: 1.5; }
+    h1 { font-size: 1.35rem; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 18px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    input[type="text"], input[type="number"] { background: #0b1120; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 0.9rem; }
+    button { cursor: pointer; border: none; border-radius: 6px; padding: 9px 15px; font-weight: 600; font-size: 0.9rem; transition: opacity 0.15s; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-start { background: var(--ok); color: #052e16; }
+    .btn-stop { background: var(--danger); color: #fff; }
+    .btn-sec { background: #334155; color: var(--text); }
+    .btn-accent { background: var(--accent); color: #082f49; }
+    .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+    .meter-box { background: #0b1120; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .bar-wrap { height: 10px; background: #1e293b; border-radius: 99px; overflow: hidden; margin: 8px 0; }
+    .bar { height: 100%; width: 0%; background: var(--ok); transition: width 0.06s linear; }
+    .badge { font-size: 0.75rem; padding: 2px 8px; border-radius: 99px; background: #334155; color: var(--muted); }
+    .badge.live { background: rgba(239,68,68,0.2); color: #fca5a5; }
+    .alert { padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 0.88rem; display: none; }
+    .alert.warn { display: block; background: rgba(245,158,11,0.15); border: 1px solid var(--warn); color: #fde68a; }
+    .alert.err { display: block; background: rgba(239,68,68,0.15); border: 1px solid var(--danger); color: #fecaca; }
+    .session-item { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+    audio { width: 100%; height: 34px; margin-top: 4px; }
+    .meta { font-size: 0.82rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>🎙️ Interview-Meet — Cổng 1 PoC: Thu Âm Tách 2 Kênh (Bot-Free)</h1>
+  <div class="sub">Tách độc lập Kênh 1 (Tab Google Meet / HR) + Kênh 2 (Micro cá nhân) • Lưu cục bộ IndexedDB • Kiểm chứng mốc giây &lt; 1s</div>
+
+  <div id="protocolWarn" class="alert warn">
+    ⚠️ Trình duyệt chặn Web Audio trên giao thức <code>file://</code>. Hãy mở qua <code>http://localhost:8765</code> (chạy <code>python3 -m http.server 8765 --directory poc/gate1</code>).
+  </div>
+  <div id="errorBox" class="alert err"></div>
+
+  <div class="card">
+    <div class="row">
+      <input id="sessionTitle" type="text" placeholder="Tên buổi test (VD: Phỏng vấn Backend Công ty A)" style="flex:1; min-width:240px;" />
+      <button id="btnStart" class="btn-start">▶ Bắt đầu Thu 2 Kênh</button>
+      <button id="btnStop" class="btn-stop" disabled>⏹ Dừng & Lưu IndexedDB</button>
+      <span id="timerBadge" class="badge">00:00</span>
+    </div>
+    <div class="meta" style="margin-top:8px;">
+      💡 Khi hộp thoại Chrome hiện lên: chọn <b>Thẻ (Chrome Tab)</b> đang mở Google Meet và <b>bắt buộc tích ô "Chia sẻ cả âm thanh thẻ / Also share tab audio"</b>.
+    </div>
+
+    <div class="meters">
+      <div class="meter-box">
+        <div class="row" style="justify-content:space-between;">
+          <strong>Kênh 1: Tab Meet (HR / Đối tác)</strong>
+          <span id="vadTabTxt" class="meta">VAD nói: 0%</span>
+        </div>
+        <div class="bar-wrap"><div id="barTab" class="bar"></div></div>
+        <div class="meta">Nguồn: <code>getDisplayMedia</code> (Opus 32kbps, 0% Video)</div>
+      </div>
+      <div class="meter-box">
+        <div class="row" style="justify-content:space-between;">
+          <strong>Kênh 2: Micro Cá Nhân (Bạn)</strong>
+          <span id="vadMicTxt" class="meta">VAD nói: 0%</span>
+        </div>
+        <div class="bar-wrap"><div id="barMic" class="bar"></div></div>
+        <div class="meta">Nguồn: <code>getUserMedia</code> (Chống vọng Echo ON)</div>
+      </div>
+    </div>
+    <div id="bleedWarn" class="alert warn" style="margin-top:12px; margin-bottom:0; display:none;">
+      ⚠️ Phát hiện cả 2 kênh cùng thu âm lượng lớn liên tục — kiểm tra xem loa ngoài có đang dội vào Micro không (khuyên đeo tai nghe khi phỏng vấn).
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <strong>📂 Các Phiên Đã Lưu Trong IndexedDB Trình Duyệt ($0 Cloud Storage)</strong>
+      <button id="btnRefresh" class="btn-sec" style="padding:5px 10px; font-size:0.8rem;">Làm mới</button>
+    </div>
+    <div id="sessionList" class="meta" style="margin-top:10px;">Đang tải dữ liệu cục bộ...</div>
+  </div>
+
+<script>
+const DB_NAME = 'InterviewMeetGate1DB', STORE = 'sessions';
+const $ = (id) => document.getElementById(id);
+if (location.protocol === 'file:') $('protocolWarn').style.display = 'block';
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+let displayStream, micStream, recTab, recMic, audioCtx, rafId, timerId, startMs = 0;
+let chunksTab = [], chunksMic = [], vadFrames = 0, tabSpeechFrames = 0, micSpeechFrames = 0, overlapFrames = 0;
+
+function showError(msg) {
+  const box = $('errorBox');
+  box.textContent = msg;
+  box.style.display = msg ? 'block' : 'none';
+}
+
+function calcRms(analyser, buf) {
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / buf.length);
+}
+
+$('btnStart').onclick = async () => {
+  showError('');
+  $('bleedWarn').style.display = 'none';
+  try {
+    displayStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { max: 1 }, width: { max: 320 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    if (!displayStream.getAudioTracks().length) {
+      displayStream.getTracks().forEach(t => t.stop());
+      throw new Error('Bạn chưa bật "Chia sẻ âm thanh thẻ (Also share tab audio)" khi chọn tab Google Meet!');
+    }
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+    });
+
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+    const tabAudioOnly = new MediaStream(displayStream.getAudioTracks());
+    chunksTab = []; chunksMic = [];
+    vadFrames = 0; tabSpeechFrames = 0; micSpeechFrames = 0; overlapFrames = 0;
+
+    recTab = new MediaRecorder(tabAudioOnly, { mimeType: mime, audioBitsPerSecond: 32000 });
+    recMic = new MediaRecorder(micStream, { mimeType: mime, audioBitsPerSecond: 32000 });
+    recTab.ondataavailable = (e) => e.data.size && chunksTab.push(e.data);
+    recMic.ondataavailable = (e) => e.data.size && chunksMic.push(e.data);
+
+    audioCtx = new AudioContext();
+    const anTab = audioCtx.createAnalyser(), anMic = audioCtx.createAnalyser();
+    anTab.fftSize = 512; anMic.fftSize = 512;
+    audioCtx.createMediaStreamSource(tabAudioOnly).connect(anTab);
+    audioCtx.createMediaStreamSource(micStream).connect(anMic);
+    const bufTab = new Uint8Array(anTab.fftSize), bufMic = new Uint8Array(anMic.fftSize);
+
+    const tickMeters = () => {
+      const rmsTab = calcRms(anTab, bufTab), rmsMic = calcRms(anMic, bufMic);
+      $('barTab').style.width = Math.min(100, rmsTab * 380) + '%';
+      $('barMic').style.width = Math.min(100, rmsMic * 380) + '%';
+      vadFrames++;
+      const tabActive = rmsTab > 0.018, micActive = rmsMic > 0.022;
+      if (tabActive) tabSpeechFrames++;
+      if (micActive) micSpeechFrames++;
+      overlapFrames = (tabActive && micActive) ? overlapFrames + 1 : Math.max(0, overlapFrames - 1);
+      if (overlapFrames > 90) $('bleedWarn').style.display = 'block';
+      if (vadFrames % 10 === 0) {
+        $('vadTabTxt').textContent = `VAD nói: ${Math.round((tabSpeechFrames / vadFrames) * 100)}%`;
+        $('vadMicTxt').textContent = `VAD nói: ${Math.round((micSpeechFrames / vadFrames) * 100)}%`;
+      }
+      rafId = requestAnimationFrame(tickMeters);
+    };
+
+    displayStream.getAudioTracks()[0].onended = () => { if (!$('btnStop').disabled) $('btnStop').click(); };
+
+    startMs = performance.now();
+    recTab.start(1000);
+    recMic.start(1000);
+    tickMeters();
+
+    $('btnStart').disabled = true; $('btnStop').disabled = false;
+    $('timerBadge').classList.add('live');
+    timerId = setInterval(() => {
+      const s = Math.floor((performance.now() - startMs) / 1000);
+      $('timerBadge').textContent = `🔴 ${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }, 300);
+  } catch (err) {
+    showError('Không thể bắt đầu thu âm: ' + (err.message || err));
+  }
+};
+
+$('btnStop').onclick = async () => {
+  $('btnStop').disabled = true;
+  clearInterval(timerId); cancelAnimationFrame(rafId);
+  $('timerBadge').classList.remove('live');
+  const durationSec = Math.max(1, Math.round((performance.now() - startMs) / 1000));
+
+  const waitStop = (r) => new Promise((res) => { r.onstop = res; r.state !== 'inactive' ? r.stop() : res(); });
+  await Promise.all([waitStop(recTab), waitStop(recMic)]);
+  [displayStream, micStream].forEach(s => s && s.getTracks().forEach(t => t.stop()));
+  if (audioCtx) await audioCtx.close();
+
+  const id = 'ses_' + Date.now();
+  const record = {
+    id,
+    title: $('sessionTitle').value.trim() || `Buổi thu ${new Date().toLocaleTimeString('vi-VN')}`,
+    createdAt: new Date().toISOString(),
+    durationSec,
+    tabSpeechPct: vadFrames ? Math.round((tabSpeechFrames / vadFrames) * 100) : 0,
+    micSpeechPct: vadFrames ? Math.round((micSpeechFrames / vadFrames) * 100) : 0,
+    tabBlob: new Blob(chunksTab, { type: 'audio/webm;codecs=opus' }),
+    micBlob: new Blob(chunksMic, { type: 'audio/webm;codecs=opus' })
+  };
+  const db = await openDB();
+  await new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(record);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+  $('btnStart').disabled = false;
+  $('sessionTitle').value = '';
+  renderSessions();
+};
+
+function fixWebmDuration(audioEl) {
+  audioEl.addEventListener('loadedmetadata', () => {
+    if (audioEl.duration === Infinity) {
+      audioEl.currentTime = 1e101;
+      audioEl.ontimeupdate = () => { audioEl.ontimeupdate = null; audioEl.currentTime = 0; };
+    }
+  }, { once: true });
+}
+
+window.seekCitation = (id, channel) => {
+  const sec = parseFloat($(`seek_${id}`).value || '0');
+  const aTab = $(`aud_tab_${id}`), aMic = $(`aud_mic_${id}`);
+  [aTab, aMic].forEach(a => a.pause());
+  if (channel === 'tab' || channel === 'both') { aTab.currentTime = sec; aTab.play(); }
+  if (channel === 'mic' || channel === 'both') { aMic.currentTime = sec; aMic.play(); }
+};
+
+window.deleteSession = async (id) => {
+  const db = await openDB();
+  const tx = db.transaction(STORE, 'readwrite');
+  tx.objectStore(STORE).delete(id);
+  tx.oncomplete = renderSessions;
+};
+
+let activeBlobUrls = [];
+const esc = (str) => String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+async function renderSessions() {
+  activeBlobUrls.forEach(u => URL.revokeObjectURL(u)); activeBlobUrls = [];
+  const db = await openDB();
+  const items = await new Promise((res) => {
+    const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
+    req.onsuccess = () => res(req.result.reverse());
+  });
+  const box = $('sessionList');
+  if (!items.length) { box.innerHTML = 'Chưa có bản ghi nào trong IndexedDB.'; return; }
+  box.innerHTML = items.map(s => {
+    const urlTab = URL.createObjectURL(s.tabBlob), urlMic = URL.createObjectURL(s.micBlob);
+    activeBlobUrls.push(urlTab, urlMic);
+    const kbTab = Math.round(s.tabBlob.size / 1024), kbMic = Math.round(s.tabBlob.size / 1024);
+    const slug = s.id;
+    return `<div class="session-item">
+      <div class="row" style="justify-content:space-between;">
+        <div><strong style="color:#f8fafc;">${esc(s.title)}</strong> <span class="badge">${s.durationSec}s</span></div>
+        <div class="meta">${new Date(s.createdAt).toLocaleString('vi-VN')} • Tab: ${kbTab}KB (VAD ${s.tabSpeechPct}%) | Mic: ${kbMic}KB (VAD ${s.micSpeechPct}%)</div>
+      </div>
+      <div class="meters" style="margin-top:8px;">
+        <div><div class="meta">🔊 Kênh 1 — HR / Google Meet Tab:</div><audio id="aud_tab_${s.id}" controls src="${urlTab}"></audio></div>
+        <div><div class="meta">🎤 Kênh 2 — Ứng viên / Micro:</div><audio id="aud_mic_${s.id}" controls src="${urlMic}"></audio></div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <span class="meta">🎯 Kiểm chứng nhảy mốc giây (Citation):</span>
+        <input id="seek_${s.id}" type="number" min="0" step="0.5" value="0" style="width:85px;" /> <span class="meta">giây</span>
+        <button class="btn-sec" onclick="seekCitation('${s.id}','tab')">Nghe HR tại mốc</button>
+        <button class="btn-sec" onclick="seekCitation('${s.id}','mic')">Nghe Bạn tại mốc</button>
+        <button class="btn-accent" onclick="seekCitation('${s.id}','both')">Nghe gộp 2 kênh</button>
+        <a href="${urlTab}" download="${slug}_ch1_hr_tab.webm"><button class="btn-sec">⬇ Tải Kênh 1 (.webm)</button></a>
+        <a href="${urlMic}" download="${slug}_ch2_user_mic.webm"><button class="btn-sec">⬇ Tải Kênh 2 (.webm)</button></a>
+        <button class="btn-sec" style="color:#fca5a5;" onclick="deleteSession('${s.id}')">Xóa</button>
+      </div>
+    </div>`;
+  }).join('');
+  items.forEach(s => { fixWebmDuration($(`aud_tab_${s.id}`)); fixWebmDuration($(`aud_mic_${s.id}`)); });
+}
+$('btnRefresh').onclick = renderSessions;
+renderSessions();
+</script>
+</body>
+</html>
