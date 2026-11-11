@@ -12,11 +12,14 @@ Trình duyệt Chrome yêu cầu ngữ cảnh bảo mật (`http://localhost`) �
 python3 -m http.server 8765 --directory poc/gate1
 ```
 
-Sau đó mở trình duyệt Chrome tại địa chỉ: **http://localhost:8765**
+Sau đó mở **trình duyệt Google Chrome / Edge / Cốc Cốc bên ngoài** (không mở trong tab Preview nội bộ của IDE vì Electron WebView chặn `getDisplayMedia`) tại địa chỉ: **http://localhost:8765**
 
-### Quy trình kiểm thử phòng họp Google Meet thật:
+### Chế độ 1 — Test nhanh riêng Micro cá nhân (2 phút):
+- Bấm **`🎤 Test Nhanh: Chỉ Thu Micro`** -> đọc đoạn kịch bản mẫu bên dưới -> bấm **`⏹ Dừng & Lưu IndexedDB`** -> tải file `.webm` Kênh 2 về chấm điểm `WER`.
+
+### Chế độ 2 — Quy trình kiểm thử phòng họp Google Meet / YouTube tách 2 kênh:
 1. Mở một phòng Google Meet ở tab bên cạnh (hoặc mở 1 video phỏng vấn kỹ thuật trên YouTube trong tab Chrome để giả lập giọng HR).
-2. Quay sang tab `http://localhost:8765`, bấm **▶ Bắt đầu Thu 2 Kênh**.
+2. Quay sang tab `http://localhost:8765`, bấm **▶ Thu 2 Kênh (Meet + Micro)**.
 3. Khi hộp thoại chia sẻ màn hình hiện lên:
    - Chọn tab **Thẻ Chrome (Chrome Tab)** đang mở Google Meet.
    - **Bắt buộc bật công tắc `"Chia sẻ cả âm thanh thẻ" (Also share tab audio)`** ở góc dưới hộp thoại.

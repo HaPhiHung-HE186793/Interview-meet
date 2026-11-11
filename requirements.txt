@@ -1,0 +1,9 @@
+# Interview-Meet Context Engine — Python Dependencies (PoC Gate 1 & Gate 2)
+# Yêu cầu hệ thống bắt buộc cho xử lý VAD/WebM: cài đặt `ffmpeg` trên máy
+#   - Ubuntu/Debian: sudo apt update && sudo apt install -y ffmpeg
+#   - macOS:         brew install ffmpeg
+#   - Windows:       winget install Gyan.FFmpeg
+
+requests>=2.31.0
+python-dotenv>=1.0.0
+google-genai>=1.0.0

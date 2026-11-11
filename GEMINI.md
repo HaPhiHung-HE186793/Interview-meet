@@ -11,6 +11,7 @@ Trước khi thiết kế tính năng, sửa schema database, chọn API, địn
 - [docs/00_MASTER_SPEC.md](docs/00_MASTER_SPEC.md): Hồ sơ tổng hợp tầm nhìn sản phẩm, 4 hào lũy phòng thủ, kiến trúc 5 tầng, bài toán kinh tế đơn vị vốn `0đ` và lộ trình PoC 14 ngày (4 cổng Go/No-Go).
 - [docs/01_MARKET_RESEARCH_Q4_2026.md](docs/01_MARKET_RESEARCH_Q4_2026.md): Báo cáo khảo sát Deep Research toàn cảnh thị trường & đối thủ Q4/2026 (bản đầy đủ số liệu Gartner, Greenhouse, Fabric, Stanford HAI, benchmark WER code-switching Anh–Việt, điểm yếu của Big Tech / Granola / Otter / nhóm Stealth Cheating / startup nội địa).
 - [docs/02_IDEATION_AND_WORKFLOW_GUIDE.md](docs/02_IDEATION_AND_WORKFLOW_GUIDE.md): Nhật ký ý tưởng khởi nguồn, chiến thuật sống còn vốn `0đ`, nguyên tắc "3 Không" và quy trình phối hợp **Gemini Web + NotebookLM (`00_INTERVIEW_MEET_CONTEXT_ENGINE`) + Gem ↔ Antigravity IDE**.
+- [docs/03_PROGRESS_AND_HOME_HANDOFF.md](docs/03_PROGRESS_AND_HOME_HANDOFF.md): Nhật ký tiến độ hiện tại (đã xong Pha 0 + Code & Lab Test Cổng 1 `WER = 1.39%`), hướng dẫn bàn giao thiết lập môi trường và kịch bản test giọng thật tại máy ở nhà để chuyển sang Cổng 2.
 
 ---
 

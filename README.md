@@ -20,7 +20,9 @@
 - [docs/00_MASTER_SPEC.md](docs/00_MASTER_SPEC.md): Hồ sơ tổng hợp kiến trúc, kinh tế đơn vị vốn `0đ` và lộ trình PoC 14 ngày (4 Cổng Go/No-Go).
 - [docs/01_MARKET_RESEARCH_Q4_2026.md](docs/01_MARKET_RESEARCH_Q4_2026.md): Báo cáo khảo sát Deep Research thị trường & đối thủ cạnh tranh Q4/2026.
 - [docs/02_IDEATION_AND_WORKFLOW_GUIDE.md](docs/02_IDEATION_AND_WORKFLOW_GUIDE.md): Nhật ký ý tưởng gốc, chiến thuật sống còn vốn `0đ` và quy trình phối hợp Gemini Web – NotebookLM – Antigravity.
-- [poc/gate1/](poc/gate1/README.md): **Cổng 1 (Ngày 1–3)** — Giao diện Web PoC thu âm tách 2 kênh lưu `IndexedDB` + Script Python benchmark STT song ngữ Anh–Việt.
+- [docs/03_PROGRESS_AND_HOME_HANDOFF.md](docs/03_PROGRESS_AND_HOME_HANDOFF.md): **Bàn giao tiến độ & Hướng dẫn chạy tiếp trên máy ở nhà (có Micro)** — đọc file này đầu tiên khi chuyển máy!
+- [poc/gate1/](poc/gate1/README.md): **Cổng 1 (Ngày 1–3)** — Giao diện Web PoC thu âm tách 2 kênh lưu `IndexedDB` + Script Python benchmark STT song ngữ Anh–Việt (`WER = 1.39%` trên bản kiểm chứng Lab).
+- [requirements.txt](requirements.txt): Danh sách thư viện Python gọn nhẹ (`requests`, `python-dotenv`, `google-genai`; yêu cầu cài `ffmpeg` trên máy).
 
 ---
 
