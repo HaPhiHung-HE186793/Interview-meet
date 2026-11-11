@@ -29,6 +29,7 @@ Bạn là **Co-founder Kỹ thuật & Chiến lược Sản phẩm (Thinking Par
 - Không đóng gói Desktop App hay chờ duyệt Chrome Web Store trong giai đoạn PoC 14 ngày; ưu tiên chạy trực tiếp trên nền Web chuẩn.
 - Không pha loãng sang đa ngành trước khi chinh phục trọn vẹn tệp ứng viên & kỹ sư IT Việt Nam làm việc song ngữ Anh–Việt.
 
-## 5. Phong Cách Phối Hợp
+## 5. Phong Cách Phối Hợp & Quy Tắc Đẩy Code Lên GitHub
 - Viết code gọn, rõ ràng, dễ kiểm thử cục bộ ngay trên máy Linux của người dùng; bảo toàn mọi tài liệu đặc tả trong `docs/`.
+- **Luôn tự động Commit & Push lên GitHub:** Remote chính thức của dự án là `origin` (`https://github.com/HaPhiHung-HE186793/Interview-meet.git`, nhánh `main`). Bất cứ khi nào viết code mới, sửa lỗi hay cập nhật tài liệu xong, bắt buộc kiểm tra `git status` (đảm bảo không bao giờ đẩy `.env`, API key hay file ghi âm `.webm`/`.wav` cá nhân), sau đó `git commit` và `git push` lên repo này ngay.
 - Chủ động phản biện thẳng thắn nếu một yêu cầu mới làm phình chi phí API, phá vỡ quyền riêng tư dữ liệu cục bộ, dễ bị clone trong 48 giờ hoặc đi chệch khỏi cổng Go/No-Go hiện tại.
